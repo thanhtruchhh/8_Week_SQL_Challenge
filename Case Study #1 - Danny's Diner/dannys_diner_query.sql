@@ -186,8 +186,8 @@ ORDER BY 2 DESC;
 
 -- 10. In the first week after a customer joins the program (including their join date) they earn 2x points on all items, not just sushi - how many points do customer A and B have at the end of January?
 
--- Calc points earned by mem customers at the end of Jan.
-WITH cus_points_in_Jan AS (
+-- Calc points earned by mem customers from join date to 31/01/2021.
+WITH cus_points_after_mem AS (
   SELECT
       customer_id,
       CASE
@@ -202,12 +202,39 @@ WITH cus_points_in_Jan AS (
   INNER JOIN dannys_diner.members USING(customer_id)
   INNER JOIN dannys_diner.menu USING(product_id)
   WHERE order_date BETWEEN join_date AND MAKE_DATE(2021, 01, 31)
+),
+
+-- Calc points earned by mem customers before join date.
+cus_points_before_mem AS (
+ SELECT
+      customer_id,
+      CASE
+          WHEN product_name = 'sushi' THEN 2
+          ELSE 1
+      END * price * 10 AS points
+  FROM dannys_diner.sales 
+  INNER JOIN dannys_diner.members USING(customer_id)
+  INNER JOIN dannys_diner.menu USING(product_id)
+  WHERE order_date < join_date
+),
+
+-- Combine points of members.
+mem_points AS (
+  SELECT 
+    customer_id,
+    points
+  FROM cus_points_after_mem
+  UNION ALL
+  SELECT 
+    customer_id,
+    points
+  FROM cus_points_before_mem
 )
 
-SELECT 
-  customer_id,
-  SUM(points) AS total_point
-FROM cus_points_in_Jan
+SELECT
+	customer_id,
+    SUM(points) AS total_point
+FROM mem_points
 GROUP BY 1
 ORDER BY 2 DESC;
 
