@@ -157,3 +157,273 @@ ALTER toppings TYPE INT;
 ---
 
 ## Questions and Solutions
+
+### A. Pizza Metrics
+
+#### Question 1: How many pizzas were ordered?
+
+```sql
+SELECT COUNT(pizza_id) pizza_ordered_cnt
+FROM customer_orders_temp;
+```
+
+**Output:**
+
+| pizza_ordered_cnt |
+| ----------------- |
+| 14                |
+
+Total of 14 pizzas were ordered.
+
+---
+
+#### Question 2: How many unique customer orders were made?
+
+```sql
+SELECT COUNT(DISTINCT order_id) order_cnt
+FROM customer_orders_temp;
+```
+
+**Output:**
+
+| order_cnt |
+| --------- |
+| 10        |
+
+There are 10 unique customer orders made.
+
+---
+
+#### Question 3: How many successful orders were delivered by each runner?
+
+```sql
+SELECT
+	runner_id,
+	COUNT(order_id) AS order_cnt
+FROM runner_orders_temp
+WHERE cancellation IS NULL
+GROUP BY 1
+ORDER BY 1;
+```
+
+**Output:**
+
+| runner_id | order_cnt |
+| --------- | --------- |
+| 1         | 4         |
+| 2         | 3         |
+| 3         | 1         |
+
+- Runner 1 deliveried successfully 4 orders.
+- Runner 2 deliveried successfully 3 orders.
+- Runner 3 deliveried successfully 1 order.
+  
+---
+
+#### Question 4: How many of each type of pizza was delivered?
+
+After joining tables, exclude cancelled orders.
+
+```sql
+SELECT
+	pizza_id,
+	pizza_name,
+	COUNT(1) AS order_cnt
+FROM customer_orders_temp
+INNER JOIN runner_orders_temp USING(order_id)
+INNER JOIN pizza_runner.pizza_names USING(pizza_id)
+WHERE cancellation IS NULL
+GROUP BY 1, 2
+ORDER BY 1;
+```
+
+**Output:**
+
+| pizza_id | pizza_name | order_cnt |
+| -------- | ---------- | --------- |
+| 1        | Meatlovers | 9         |
+| 2        | Vegetarian | 3         |
+
+- There are 9 delivered Meatlovers pizzas.
+- There are 3 delivered Vegetarian pizzas.
+  
+---
+#### Question 5: How many Vegetarian and Meatlovers were ordered by each customer?
+
+ All the pizzas were ordered but some of them had not been delivered successfully &rarr; Not exclude cancelled orders.
+
+```sql
+SELECT
+	customer_id,
+	pizza_name,
+	COUNT(1) AS order_cnt
+FROM customer_orders_temp
+INNER JOIN pizza_runner.pizza_names USING(pizza_id)
+WHERE 
+	pizza_name = 'Vegetarian'
+	OR pizza_name = 'Meatlovers'
+GROUP BY 1, 2
+ORDER BY 1, 2;
+```
+
+**Output:**
+
+| customer_id | pizza_name | order_cnt |
+| ----------- | ---------- | --------- |
+| 101         | Meatlovers | 2         |
+| 101         | Vegetarian | 1         |
+| 102         | Meatlovers | 2         |
+| 102         | Vegetarian | 1         |
+| 103         | Meatlovers | 3         |
+| 103         | Vegetarian | 1         |
+| 104         | Meatlovers | 3         |
+| 105         | Vegetarian | 1         |
+
+
+- Customer 101 and customer 102 ordered 2 Meatlovers pizzas and 1 Vegetarian pizza.
+- Customer 103 ordered 3 Meatlovers pizzas and 1 Vegetarian pizza.
+- Customer 104 ordered 3 Meatlovers pizza.
+- Customer 105 ordered 1 Vegetarian pizza.
+
+---
+
+#### Question 6: What was the maximum number of pizzas delivered in a single order?
+
+```sql
+WITH cnt_pizza_by_order AS (
+  SELECT 
+    order_id,
+    COUNT(*) AS pizza_cnt
+  FROM customer_orders_temp
+  INNER JOIN runner_orders_temp USING(order_id)
+  WHERE cancellation IS NULL
+  GROUP BY 1
+)
+
+SELECT MAX(pizza_cnt) AS max_pizza_in_order
+FROM cnt_pizza_by_order;
+```
+
+**Output:**
+
+| max_pizza_in_order |
+| ------------------ |
+| 3                  |
+
+Maximum number of pizzas delivered in a single order is 3.
+
+---
+
+#### Question 7: For each customer, how many delivered pizzas had at least 1 change and how many had no changes?
+
+```sql
+WITH order_changed AS (
+  SELECT 
+      customer_id,
+      CASE 
+          WHEN exclusions IS NOT NULL OR extras IS NOT NULL THEN 1
+          ELSE NULL
+      END is_changed
+  FROM customer_orders_temp
+  INNER JOIN runner_orders_temp USING(order_id)
+  WHERE cancellation IS NULL
+)
+
+SELECT
+	customer_id,
+    COUNT(is_changed) AS changed_pizza_cnt,
+    COUNT(1) - COUNT(is_changed) AS not_changed_pizza_cnt
+FROM order_changed
+GROUP BY 1
+ORDER BY 1;
+```
+
+**Output:**
+
+| customer_id | changed_pizza_cnt | not_changed_pizza_cnt |
+| ----------- | ----------------- | --------------------- |
+| 101         | 0                 | 2                     |
+| 102         | 0                 | 3                     |
+| 103         | 3                 | 0                     |
+| 104         | 2                 | 1                     |
+| 105         | 1                 | 0                     |
+
+- Customer 101 and customer 102 seem to love original pizzas.
+- Customer 103, customer 104, and customer 105 have their own preference for pizza topping and requested at least 1 change on their pizzas.
+
+---
+
+#### Question 8: How many pizzas were delivered that had both exclusions and extras?
+```sql
+SELECT COUNT(
+	CASE
+		WHEN exclusions IS NULL OR extras IS NULL THEN NULL
+  		ELSE 1
+  	END
+) AS exclusions_and_extras_pizza_cnt
+FROM customer_orders_temp
+INNER JOIN runner_orders_temp USING(order_id)
+WHERE cancellation IS NULL;
+```
+
+**Output:**
+
+| exclusions_and_extras_pizza_cnt |
+| ------------------------------- |
+| 1                               |
+
+Only 1 pizza delivered that had both extra and exclusion toppings. 
+
+---
+#### Question 9: What was the total volume of pizzas ordered for each hour of the day?
+
+```sql
+SELECT 
+	EXTRACT(HOUR FROM order_time) AS hour_of_day,
+	COUNT(1) AS pizza_cnt
+FROM customer_orders_temp
+GROUP BY 1
+ORDER BY 1;
+```
+
+**Output:**
+
+| hour_of_day | pizza_cnt |
+| ----------- | --------- |
+| 11          | 1         |
+| 13          | 3         |
+| 18          | 3         |
+| 19          | 1         |
+| 21          | 3         |
+| 23          | 3         |
+
+- Highest volume of pizza ordered is at 13, 18, 21, 23.
+- Lowest volume of pizza ordered is at 11, 19.
+
+---
+#### Question 10: What was the volume of orders for each day of the week?
+
+```sql
+SELECT 
+	TO_CHAR(order_time, 'Day') AS day_of_week,
+	COUNT(1) AS pizza_cnt
+FROM customer_orders_temp
+GROUP BY 1
+ORDER BY 2;
+
+```
+
+**Output:**
+
+| day_of_week | order_cnt |
+| ----------- | --------- |
+| Friday      | 1         |
+| Saturday    | 2         |
+| Thursday    | 2         |
+| Wednesday   | 5         |
+
+-- Wednesday is the busiest day of the week with 5 orders.
+-- Thursday, Friday, and Saturdate have lower order count.
+-- There is no orders on the other days of week.
+
+---
