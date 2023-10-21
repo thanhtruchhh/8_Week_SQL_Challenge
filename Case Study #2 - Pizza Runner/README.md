@@ -1,4 +1,4 @@
-# Case Study #1 - Danny's Diner
+# Case Study #2 - Pizza Runner
 <img src="https://8weeksqlchallenge.com/images/case-study-designs/2.png" alt="Case Study #2 - Pizza Runner Image" width="500" height="520">
 
 ## Business Task
@@ -422,8 +422,206 @@ ORDER BY 2;
 | Thursday    | 2         |
 | Wednesday   | 5         |
 
--- Wednesday is the busiest day of the week with 5 orders.
--- Thursday, Friday, and Saturdate have lower order count.
--- There is no orders on the other days of week.
+- Wednesday is the busiest day of the week with 5 orders.
+- Thursday, Friday, and Saturdate have lower order count.
+- There is no order on the other days of week.
+
+---
+
+### B. Runner and Customer Experience
+
+#### Question 1: How many runners signed up for each 1 week period? (i.e. week starts `2021-01-01`)
+
+`EXTRACT(WEEK FROM ...` calculates weeks based on ISO 8601, which may not align with the requirement *(week starts 2021-01-01)* &rarr; Customize approach to calculate week number:
+
+- Calculate difference in days between the `registratrion_date` and 2021-01-01.
+- Convert different days to weeks by dividing it by 7.
+- Add 1 to the result, so week numbers start from 1.
+
+```sql
+SELECT 
+  'Week ' || DIV(registration_date - MAKE_DATE(2021, 1, 1), 7) + 1 AS registration_week,
+  COUNT(runner_id) AS runner_signup
+FROM pizza_runner.runners
+GROUP BY 1
+ORDER BY 1;
+```
+
+**Output:**
+
+| registration_week | runner_signup |
+| ----------------- | ------------- |
+| Week 1            | 2             |
+| Week 2            | 1             |
+| Week 3            | 1             |
+
+- On week 1 of 2021, 2 runners signed up.
+- On week 2 and 3 of 2021, 1 runners signed up.
+---
+
+#### Question 2: What was the average time in minutes it took for each runner to arrive at the Pizza Runner HQ to pickup the order?
+
+```sql
+WITH unique_orders AS (
+  SELECT DISTINCT
+      order_id,
+      order_time
+  FROM customer_orders_temp
+)
+
+SELECT
+	AVG(EXTRACT(MINUTE FROM pickup_time - order_time)) AS avg_pickup_time
+FROM unique_orders
+INNER JOIN runner_orders_temp USING(order_id)
+WHERE pickup_time IS NOT NULL; 
+```
+
+**Output:**
+
+| avg_pickup_time |
+| --------------- |
+| 15.625          |
+
+The average time taken by runners to arrive at Pizza Runner HQ to pick up the order is 15.625 minutes.
+
+---
+
+#### Question 3: Is there any relationship between the number of pizzas and how long the order takes to prepare?
+
+Preparation time = Time from the order made to it picked up by a runner.
+
+```sql
+WITH pizza_cnt_order AS (
+  SELECT DISTINCT
+      order_id,
+      order_time,
+      COUNT(1) AS pizza_cnt		
+  FROM customer_orders_temp
+  GROUP BY 1, 2
+)
+
+SELECT
+	pizza_cnt,
+	AVG(EXTRACT(MINUTE FROM pickup_time - order_time)) AS avg_pre_time
+FROM pizza_cnt_order
+INNER JOIN runner_orders_temp USING(order_id)
+WHERE pickup_time IS NOT NULL 
+GROUP BY 1
+ORDER BY 1;
+```
+
+**Output:**
+
+| pizza_cnt | avg_pre_time |
+| --------- | ------------ |
+| 1         | 12           |
+| 2         | 18           |
+| 3         | 29           |
+
+The number of pizzas in an order increases, the average preparation time also tends to increase.
+
+---
+
+#### Question 4: What was the average distance travelled for each customer?
+
+```sql
+WITH unique_order_cus AS (
+  SELECT DISTINCT
+  		customer_id,
+		order_id
+  FROM customer_orders_temp
+)
+
+SELECT
+	customer_id,
+    AVG(distance)
+FROM unique_order_cus
+INNER JOIN runner_orders_temp USING(order_id)
+GROUP BY 1
+ORDER BY 1;
+```
+
+**Output:**
+
+| customer_id | avg  |
+| ----------- | ---- |
+| 101         | 20   |
+| 102         | 18.4 |
+| 103         | 23.4 |
+| 104         | 10   |
+| 105         | 25   |
+
+Customer 104 stays the nearest to Pizza Runner HQ at average distance of 10km, whereas Customer 105 stays the furthest at 25km.
+
+---
+
+#### Question 5: What was the difference between the longest and shortest delivery times for all orders?
+
+```sql
+SELECT MAX(duration) - MIN(duration) delivery_time_diff
+FROM runner_orders_temp;
+```
+
+**Output:**
+
+| delivery_time_diff |
+| ------------------ |
+| 30                 |
+
+The difference between longest and shortest delivery time for all orders is 30 minutes.
+
+---
+
+#### Question 6: 
+
+```sql
+SELECT 
+	runner_id,
+    distance,
+    distance / duration * 60 AS avg_speed
+FROM runner_orders_temp
+WHERE cancellation IS NULL -- Exclude cancelled orders
+ORDER BY 1, 2;
+```
+
+**Output:**
+
+| runner_id | distance | avg_speed          |
+| --------- | -------- | ------------------ |
+| 1         | 10       | 60                 |
+| 1         | 13.4     | 40.2               |
+| 1         | 20       | 37.5               |
+| 1         | 20       | 44.44444444444444  |
+| 2         | 23.4     | 93.6               |
+| 2         | 23.4     | 35.099999999999994 |
+| 2         | 25       | 60                 |
+| 3         | 10       | 40                 |
+
+- Runner 1 might slow down when running longer distance.
+- Runner 2 vary speed a lot although distances don't vary too much.  There might be breaks or other factors affecting the speed.
+
+---
+
+#### Question 7: What is the successful delivery percentage for each runner?
+
+```sql
+SELECT 
+	runner_id,
+	100 - ROUND(100.0 * COUNT(cancellation) / COUNT(runner_id), 2) successful_delivery_pct
+FROM runner_orders_temp
+GROUP BY 1
+ORDER BY 1;
+```
+
+**Output:**
+| runner_id | successful_delivery_pct |
+| --------- | ----------------------- |
+| 1         | 100.00                  |
+| 2         | 75.00                   |
+| 3         | 50.00                   |
+
+- Runner 1 has 100% successful delivery.
+- Runner 2 has 75% successful delivery.
+- Runner 3 has 50% successful delivery
 
 ---
