@@ -625,3 +625,234 @@ ORDER BY 1;
 - Runner 3 has 50% successful delivery
 
 ---
+
+### C. Ingredient Optimisation
+
+#### Question 1: What are the standard ingredients for each pizza?
+
+Use `STRING_AGG` function to create a comma-separated list of toppings for each pizza, ensure toppings are ordered alphabetically within each group.
+
+```sql
+SELECT
+	pizza_name, 
+	STRING_AGG(topping_name, ', ' ORDER BY topping_name) AS toppings
+FROM pizza_recipes_temp r
+INNER JOIN pizza_runner.pizza_names USING(pizza_id)
+INNER JOIN pizza_runner.pizza_toppings t ON r.toppings = t.topping_id
+GROUP BY 1
+ORDER BY 1;
+```
+
+**Output:**
+
+| pizza_name | toppings                                                              |
+| ---------- | --------------------------------------------------------------------- |
+| Meatlovers | BBQ Sauce, Bacon, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami |
+| Vegetarian | Cheese, Mushrooms, Onions, Peppers, Tomato Sauce, Tomatoes            |
+
+---
+
+#### Question 2: What was the most commonly added extra?
+
+```sql
+WITH extra_toppings AS (
+  SELECT
+      UNNEST(STRING_TO_ARRAY(extras, ', '))::INT AS extras,
+      COUNT(1) AS fre
+  FROM customer_orders_temp
+  GROUP BY 1
+)
+
+SELECT 
+	topping_name,
+	fre
+FROM extra_toppings e
+INNER JOIN pizza_runner.pizza_toppings t ON e.extras = t.topping_id
+WHERE fre = (
+	SELECT MAX(fre)
+  	FROM extra_toppings
+);
+```
+
+**Output:**
+
+| topping_name | fre |
+| ------------ | --- |
+| Bacon        | 4   |
+
+The most popular extra ingredient is bacon, chosen 4 times as an extra topping of on pizza. 
+
+---
+
+#### Question 3: What was the most common exclusion?
+
+```sql
+WITH excluded_toppings AS (
+  SELECT
+      UNNEST(STRING_TO_ARRAY(exclusions, ', '))::INT AS exclusions,
+      COUNT(1) AS fre
+  FROM customer_orders_temp
+  GROUP BY 1
+)
+
+SELECT 
+	topping_name,
+	fre
+FROM excluded_toppings e
+INNER JOIN pizza_runner.pizza_toppings t ON e.exclusions = t.topping_id
+WHERE fre = (
+	SELECT MAX(fre)
+  	FROM excluded_toppings
+);
+```
+
+**Output:**
+
+| topping_name | fre |
+| ------------ | --- |
+| Cheese       | 4   |
+
+It appears that customers don't prefer cheese, as it was excluded from 4 pizzas.
+
+---
+
+#### Question 4: Generate an order item for each record in the `customers_orders` table 
+
+The format of one of the following:
+- `Meat Lovers`
+- `Meat Lovers - Exclude Beef`
+- `Meat Lovers - Extra Bacon`
+- `Meat Lovers - Exclude Cheese, Bacon - Extra Mushroom, Peppers`
+
+Steps:
+1. Generate row numbers for customer orders.
+2. Expand exclusions and extras by splitting them into an array of integers.
+3. Find names of pizzas, extras, and excluded toppings.
+4. Find names of original pizzas without customization.
+5. Generate the order item column and combine result for both original and customized pizzas.
+   
+```sql
+WITH order_cus_rn AS (
+  SELECT 
+      ROW_NUMBER() OVER() AS rn,
+      *
+  FROM customer_orders_temp
+),
+
+exclusives_extras AS (
+  SELECT 
+      rn,
+      order_id,
+      pizza_id,
+      UNNEST(STRING_TO_ARRAY(exclusions, ', '))::INT AS exclusions,
+      UNNEST(STRING_TO_ARRAY(extras, ', '))::INT AS extras
+  FROM order_cus_rn o
+),
+
+customed_pizzas AS (
+  SELECT
+      rn,
+      order_id,
+      pizza_name,
+      STRING_AGG(t1.topping_name, ', ' ORDER BY exclusions) AS exclusions,
+      STRING_AGG(t2.topping_name, ', ' ORDER BY extras) AS extras
+  FROM exclusives_extras o
+  LEFT JOIN pizza_runner.pizza_names USING(pizza_id)
+  LEFT JOIN pizza_runner.pizza_toppings t1 ON o.exclusions = t1.topping_id
+  LEFT JOIN pizza_runner.pizza_toppings t2 ON o.extras = t2.topping_id
+  GROUP BY 1, 2, 3
+),
+
+original_pizzas AS (
+  SELECT
+      rn,
+      order_id,
+      pizza_name,
+      exclusions,
+      extras
+  FROM order_cus_rn
+  INNER JOIN pizza_runner.pizza_names USING(pizza_id)
+  WHERE exclusions IS NULL 
+      AND extras IS NULL
+)
+
+SELECT 
+	order_id,
+	order_item
+FROM (
+  SELECT 
+      rn,
+      order_id,
+      pizza_name || 
+      CASE 
+          WHEN exclusions IS NOT NULL THEN ' - Exclude ' || exclusions
+          ELSE ''
+      END ||
+      CASE 
+          WHEN extras IS NOT NULL THEN ' - Extra ' || extras
+          ELSE ''
+      END AS order_item
+  FROM customed_pizzas
+  UNION 
+  SELECT 
+      rn,
+      order_id,
+      pizza_name AS order_item
+  FROM original_pizzas
+) AS orders
+ORDER BY rn;
+```
+
+**Output:**
+| order_id | order_item                                                      |
+| -------- | --------------------------------------------------------------- |
+| 1        | Meatlovers                                                      |
+| 2        | Meatlovers                                                      |
+| 3        | Meatlovers                                                      |
+| 3        | Vegetarian                                                      |
+| 4        | Meatlovers - Exclude Cheese                                     |
+| 4        | Meatlovers - Exclude Cheese                                     |
+| 4        | Vegetarian - Exclude Cheese                                     |
+| 5        | Meatlovers - Extra Bacon                                        |
+| 6        | Vegetarian                                                      |
+| 7        | Vegetarian - Extra Bacon                                        |
+| 8        | Meatlovers                                                      |
+| 9        | Meatlovers - Exclude Cheese - Extra Bacon, Chicken              |
+| 10       | Meatlovers                                                      |
+| 10       | Meatlovers - Exclude BBQ Sauce, Mushrooms - Extra Bacon, Cheese |
+
+---
+
+#### Question 5: How many pizzas were ordered?
+
+```sql
+SELECT COUNT(pizza_id) pizza_ordered_cnt
+FROM customer_orders_temp;
+```
+
+**Output:**
+
+| pizza_ordered_cnt |
+| ----------------- |
+| 14                |
+
+Total of 14 pizzas were ordered.
+
+---
+
+#### Question 6: How many pizzas were ordered?
+
+```sql
+SELECT COUNT(pizza_id) pizza_ordered_cnt
+FROM customer_orders_temp;
+```
+
+**Output:**
+
+| pizza_ordered_cnt |
+| ----------------- |
+| 14                |
+
+Total of 14 pizzas were ordered.
+
+---
