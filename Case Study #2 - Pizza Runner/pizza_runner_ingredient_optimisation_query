@@ -91,7 +91,7 @@ ORDER BY 1;
 
 -- 2. What was the most commonly added extra?
 
--- Expand extras to set of row
+-- Expand extras to set of row.
 WITH extra_toppings AS (
   SELECT
       UNNEST(STRING_TO_ARRAY(extras, ', '))::INT AS extras,
@@ -113,7 +113,7 @@ WHERE fre = (
 
 -- 3. What was the most common exclusion?
 
--- Expand exclusions to set of row
+-- Expand exclusions to set of row.
 WITH excluded_toppings AS (
   SELECT
       UNNEST(STRING_TO_ARRAY(exclusions, ', '))::INT AS exclusions,
@@ -158,7 +158,7 @@ exclusives_extras AS (
   FROM order_cus_rn o
 ),
 
--- Find out name of pizzas, extras and excluded toppings
+-- Find name of pizzas, extras and excluded toppings
 customed_pizzas AS (
   SELECT
       rn,
@@ -173,7 +173,7 @@ customed_pizzas AS (
   GROUP BY 1, 2, 3
 ),
 
--- Find out name of pizzas without customization
+-- Find name of pizzas without customization
 original_pizzas AS (
   SELECT
       rn,
@@ -212,3 +212,138 @@ FROM (
   FROM original_pizzas
 ) AS orders
 ORDER BY rn;
+
+
+-- 5. Generate an alphabetically ordered comma separated ingredient list for each pizza order from the customer_orders table and add a 2x in front of any relevant ingredients.
+    -- For example: "Meat Lovers: 2xBacon, Beef, ... , Salami"
+    
+-- Mark order line.
+WITH order_cus_rn AS (
+  SELECT 
+      ROW_NUMBER() OVER() AS rn,
+      *
+  FROM customer_orders_temp
+),
+
+-- Generate an expanded list of pizzas, toppings, and counts for each order.
+expanded_order_pizzas AS (
+  SELECT *
+  FROM order_cus_rn
+  INNER JOIN pizza_runner.pizza_recipes USING(pizza_id)
+  INNER JOIN pizza_runner.pizza_names USING(pizza_id)
+  CROSS JOIN  pizza_runner.pizza_toppings
+),
+
+-- Calculate topping counts for each pizza in the order list.
+order_topping_counts AS (
+  SELECT 
+      rn,
+      order_id,
+      pizza_name,
+      topping_name,
+      -- toppings
+      CASE
+          WHEN topping_id IN (
+              SELECT UNNEST(STRING_TO_ARRAY(toppings, ', '))::INT
+      ) THEN 1
+          ELSE 0
+      END +
+      -- exclusions
+      CASE
+          WHEN exclusions IS NOT NULL AND topping_id IN (
+              SELECT UNNEST(STRING_TO_ARRAY(exclusions, ', '))::INT
+      ) THEN - 1
+          ELSE 0
+      END +
+      -- extras
+      CASE
+          WHEN extras IS NOT NULL AND topping_id IN (
+              SELECT UNNEST(STRING_TO_ARRAY(extras, ', '))::INT
+      ) THEN 1
+          ELSE 0
+      END AS topping_cnt
+  FROM expanded_order_pizzas
+)
+
+SELECT 
+	order_id,
+	order_ingredients
+FROM (
+  SELECT 
+      rn,
+      order_id,
+      pizza_name || ': ' ||
+      STRING_AGG(
+          CASE 
+              WHEN topping_cnt > 1 THEN  topping_cnt || 'x' 
+              ELSE ''
+          END || topping_name,
+          ', ' ORDER BY LOWER(topping_name)
+      ) AS order_ingredients
+  FROM order_topping_counts
+  WHERE topping_cnt > 0
+  GROUP BY 1, 2, pizza_name
+) a
+ORDER BY rn;
+
+
+-- 6. What is the total quantity of each ingredient used in all delivered pizzas sorted by most frequent first?
+-- Delivered pizza = Pizza delivered sucessfully.
+
+-- Get order lines of successful orders.
+WITH successful_order_line AS (
+  SELECT o.*
+  FROM customer_orders_temp o
+  INNER JOIN  runner_orders_temp USING(order_id)
+  WHERE cancellation IS NULL
+),
+
+-- Calculate counts of exclusions for each topping in successful orders.
+exclusions AS (
+  SELECT
+      UNNEST(STRING_TO_ARRAY(exclusions, ', '))::INT AS topping_id,
+      COUNT(*) AS exclusions_cnt
+  FROM successful_order_line
+  GROUP BY 1
+),
+
+-- Calculate counts of extras for each topping in successful orders.
+extras AS (
+  SELECT
+      UNNEST(STRING_TO_ARRAY(extras, ', '))::INT AS topping_id,
+      COUNT(*) AS extras_cnt
+  FROM successful_order_line
+  GROUP BY 1
+),
+
+-- Calculate counts of main_ingredients for each topping in successful orders.
+main_ingredients AS (
+  SELECT
+      toppings AS topping_id,
+      COUNT(*) AS main_ingredient_cnt
+  FROM successful_order_line
+  INNER JOIN pizza_recipes_temp USING(pizza_id)
+  GROUP BY 1
+)
+
+SELECT 
+	topping_name,
+	CASE
+		WHEN main_ingredient_cnt IS NULL THEN 0
+		ELSE main_ingredient_cnt
+	END -
+	CASE
+		WHEN exclusions_cnt IS NULL THEN 0
+		ELSE exclusions_cnt
+	END +
+	CASE
+		WHEN extras_cnt IS NULL THEN 0
+		ELSE extras_cnt
+	END AS ingredient_cnt
+FROM main_ingredients
+FULL JOIN exclusions USING(topping_id)
+FULL JOIN extras USING(topping_id)
+INNER JOIN pizza_runner.pizza_toppings USING(topping_id)
+ORDER BY 2 DESC;
+
+
