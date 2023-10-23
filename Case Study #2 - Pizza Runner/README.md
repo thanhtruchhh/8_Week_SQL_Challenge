@@ -716,7 +716,7 @@ It appears that customers don't prefer cheese, as it was excluded from 4 pizzas.
 
 ---
 
-#### Question 4: Generate an order item for each record in the `customers_orders` table 
+#### Question 4: Generate an order item for each record in the `customers_orders` table. 
 
 The format of one of the following:
 - `Meat Lovers`
@@ -724,7 +724,7 @@ The format of one of the following:
 - `Meat Lovers - Extra Bacon`
 - `Meat Lovers - Exclude Cheese, Bacon - Extra Mushroom, Peppers`
 
-Steps:
+**Steps:**
 1. Generate row numbers for customer orders.
 2. Expand exclusions and extras by splitting them into an array of integers.
 3. Find names of pizzas, extras, and excluded toppings.
@@ -823,36 +823,185 @@ ORDER BY rn;
 
 ---
 
-#### Question 5: How many pizzas were ordered?
+#### Question 5: Generate an ingredient list for each pizza order.
+Generate an alphabetically ordered comma separated ingredient list for each pizza order from the `customer_orders` table and add a `2x` in front of any relevant ingredients
 
+*For example: `"Meat Lovers: 2xBacon, Beef, ... , Salami"`*
+
+**Steps:**
+
+1. Generate row numbers for customer order lines.
+2. Generate an expanded list of pizzas, toppings, and counts for each order: Combine data from `customer_orders_temp`, `pizza_recipes`, `pizza_names`, and all possible pizza toppings using a cross join.
+3. Calculate topping counts for each pizza in the order list: Consider both toppings and their counts, exclusions, and extras.
+4. Generate a alphabetically ordered comma-separated ingredient list for each pizza order: Note filtering out topping counts < 1, and grouping the results by row number.
+   
 ```sql
-SELECT COUNT(pizza_id) pizza_ordered_cnt
-FROM customer_orders_temp;
+WITH order_cus_rn AS (
+  SELECT 
+      ROW_NUMBER() OVER() AS rn,
+      *
+  FROM customer_orders_temp
+),
+
+expanded_order_pizzas AS (
+  SELECT *
+  FROM order_cus_rn
+  INNER JOIN pizza_runner.pizza_recipes USING(pizza_id)
+  INNER JOIN pizza_runner.pizza_names USING(pizza_id)
+  CROSS JOIN  pizza_runner.pizza_toppings
+),
+
+order_topping_counts AS (
+  SELECT 
+      rn,
+      order_id,
+      pizza_name,
+      topping_name,
+      CASE
+          WHEN topping_id IN (
+              SELECT UNNEST(STRING_TO_ARRAY(toppings, ', '))::INT
+      ) THEN 1
+          ELSE 0
+      END +
+      CASE
+          WHEN exclusions IS NOT NULL AND topping_id IN (
+              SELECT UNNEST(STRING_TO_ARRAY(exclusions, ', '))::INT
+      ) THEN - 1
+          ELSE 0
+      END +
+      CASE
+	WHEN extras IS NOT NULL AND topping_id IN (
+              SELECT UNNEST(STRING_TO_ARRAY(extras, ', '))::INT
+      ) THEN 1
+	ELSE 0
+      END AS topping_cnt
+  FROM expanded_order_pizzas
+)
+
+SELECT 
+	order_id,
+	order_ingredients
+FROM (
+  SELECT 
+      rn,
+      order_id,
+      pizza_name || ': ' ||
+      STRING_AGG(
+          CASE 
+              WHEN topping_cnt > 1 THEN  topping_cnt || 'x' 
+              ELSE ''
+          END || topping_name,
+          ', ' ORDER BY LOWER(topping_name)
+      ) AS order_ingredients
+  FROM order_topping_counts
+  WHERE topping_cnt > 0
+  GROUP BY 1, 2, pizza_name
+) a
+ORDER BY rn;
 ```
 
 **Output:**
-
-| pizza_ordered_cnt |
-| ----------------- |
-| 14                |
-
-Total of 14 pizzas were ordered.
+| order_id | order_ingredients                                                                   |
+| -------- | ----------------------------------------------------------------------------------- |
+| 1        | Meatlovers: Bacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami   |
+| 2        | Meatlovers: Bacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami   |
+| 3        | Meatlovers: Bacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami   |
+| 3        | Vegetarian: Cheese, Mushrooms, Onions, Peppers, Tomato Sauce, Tomatoes              |
+| 4        | Meatlovers: Bacon, BBQ Sauce, Beef, Chicken, Mushrooms, Pepperoni, Salami           |
+| 4        | Meatlovers: Bacon, BBQ Sauce, Beef, Chicken, Mushrooms, Pepperoni, Salami           |
+| 4        | Vegetarian: Mushrooms, Onions, Peppers, Tomato Sauce, Tomatoes                      |
+| 5        | Meatlovers: 2xBacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami |
+| 6        | Vegetarian: Cheese, Mushrooms, Onions, Peppers, Tomato Sauce, Tomatoes              |
+| 7        | Vegetarian: Bacon, Cheese, Mushrooms, Onions, Peppers, Tomato Sauce, Tomatoes       |
+| 8        | Meatlovers: Bacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami   |
+| 9        | Meatlovers: 2xBacon, BBQ Sauce, Beef, 2xChicken, Mushrooms, Pepperoni, Salami       |
+| 10       | Meatlovers: Bacon, BBQ Sauce, Beef, Cheese, Chicken, Mushrooms, Pepperoni, Salami   |
+| 10       | Meatlovers: 2xBacon, Beef, 2xCheese, Chicken, Pepperoni, Salami                     |
 
 ---
 
-#### Question 6: How many pizzas were ordered?
+#### Question 6: What is the total quantity of each ingredient used in all delivered pizzas sorted by most frequent first?
+
+**Steps:**
+
+1. Get order lines of successful orders.
+2. Calculate the count of exclusions for each topping.
+3. Calculate the count of extras for each topping.
+4. Calculate the count of main ingredient for each topping.
+5. Calculate the total quantity of each ingredient.
 
 ```sql
-SELECT COUNT(pizza_id) pizza_ordered_cnt
-FROM customer_orders_temp;
+-- Get order lines of successful orders.
+WITH successful_order_line AS (
+  SELECT o.*
+  FROM customer_orders_temp o
+  INNER JOIN  runner_orders_temp USING(order_id)
+  WHERE cancellation IS NULL
+),
+
+exclusions AS (
+  SELECT
+      UNNEST(STRING_TO_ARRAY(exclusions, ', '))::INT AS topping_id,
+      COUNT(*) AS exclusions_cnt
+  FROM successful_order_line
+  GROUP BY 1
+),
+
+extras AS (
+  SELECT
+      UNNEST(STRING_TO_ARRAY(extras, ', '))::INT AS topping_id,
+      COUNT(*) AS extras_cnt
+  FROM successful_order_line
+  GROUP BY 1
+),
+
+main_ingredients AS (
+  SELECT
+      toppings AS topping_id,
+      COUNT(*) AS main_ingredient_cnt
+  FROM successful_order_line
+  INNER JOIN pizza_recipes_temp USING(pizza_id)
+  GROUP BY 1
+)
+
+SELECT 
+	topping_name,
+	CASE
+		WHEN main_ingredient_cnt IS NULL THEN 0
+		ELSE main_ingredient_cnt
+	END -
+	CASE
+		WHEN exclusions_cnt IS NULL THEN 0
+		ELSE exclusions_cnt
+	END +
+	CASE
+		WHEN extras_cnt IS NULL THEN 0
+		ELSE extras_cnt
+	END AS ingredient_cnt
+FROM main_ingredients
+FULL JOIN exclusions USING(topping_id)
+FULL JOIN extras USING(topping_id)
+INNER JOIN pizza_runner.pizza_toppings USING(topping_id)
+ORDER BY 2 DESC;
 ```
 
 **Output:**
 
-| pizza_ordered_cnt |
-| ----------------- |
-| 14                |
+| topping_name | ingredient_cnt |
+| ------------ | -------------- |
+| Bacon        | 12             |
+| Mushrooms    | 11             |
+| Cheese       | 10             |
+| Pepperoni    | 9              |
+| Salami       | 9              |
+| Chicken      | 9              |
+| Beef         | 9              |
+| BBQ Sauce    | 8              |
+| Tomato Sauce | 3              |
+| Onions       | 3              |
+| Peppers      | 3              |
+| Tomatoes     | 3              |
 
-Total of 14 pizzas were ordered.
+Bacon is the most popular topping with an ingredient count of 12. It also is the most frequently chosen extra topping in 1 other query &rarr; It has strong appeal to customers ordering pizzas.
 
 ---
