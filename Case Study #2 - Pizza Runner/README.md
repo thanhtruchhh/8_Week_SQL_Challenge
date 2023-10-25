@@ -1005,3 +1005,72 @@ ORDER BY 2 DESC;
 Bacon is the most popular topping with an ingredient count of 12. It also is the most frequently chosen extra topping in 1 other query &rarr; It has strong appeal to customers ordering pizzas.
 
 ---
+
+### D. Pricing and Ratings
+
+#### Question 1: If a Meat Lovers pizza costs $12 and Vegetarian costs $10 and there were no charges for changes - how much money has Pizza Runner made so far if there are no delivery fees?
+
+```sql
+WITH pizza_sales AS (
+  SELECT
+      pizza_id,
+      pizza_name,
+      COUNT(1) *
+      CASE
+          WHEN pizza_name = 'Meatlovers' THEN 12
+          WHEN pizza_name = 'Vegetarian' THEN 10
+      END AS total_sales
+  FROM customer_orders_temp
+  INNER JOIN runner_orders_temp USING(order_id)
+  INNER JOIN pizza_runner.pizza_names USING(pizza_id)
+  WHERE cancellation IS NULL
+  GROUP BY 1, 2
+)
+
+SELECT SUM(total_sales) AS total_sales
+FROM pizza_sales;
+```
+
+**Output:**
+
+| total_sales |
+| ----------- |
+| 138         |
+
+The total revenue is $138.
+
+#### Question 2: What if there was an additional $1 charge for any pizza extras? 
+```sql
+WITH pizza_topping_sales AS (
+  SELECT 
+      order_id,
+      CASE
+          WHEN pizza_name = 'Meatlovers' THEN 12
+          WHEN pizza_name = 'Vegetarian' THEN 10
+      END + 
+      CASE 
+          WHEN extras IS NOT NULL THEN ARRAY_LENGTH(STRING_TO_ARRAY(extras, ', '), 1)
+          ELSE 0
+      END * 1 AS total_sales
+  FROM customer_orders_temp
+  INNER JOIN pizza_runner.pizza_names USING(pizza_id)
+)
+
+SELECT SUM(total_sales) AS total_sales
+FROM pizza_topping_sales
+INNER JOIN runner_orders_temp USING(order_id)
+WHERE cancellation IS NULL;
+```
+
+**Output:**
+
+
+| total_sales |
+| ----------- |
+| 142         |
+
+The total revenue with extras is $142.
+
+---
+
+#### Question 3: The Pizza Runner team now wants to add an additional ratings system that allows customers to rate their runner, how would you design an additional table for this new dataset - generate a schema for this new table and insert your own data for ratings for each successful customer order between 1 to 5.
