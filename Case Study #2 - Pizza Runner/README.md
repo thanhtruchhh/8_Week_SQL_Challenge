@@ -9,6 +9,8 @@ Danny started by recruiting “runners” to deliver fresh pizza from Pizza Runn
 
 Full Description: [Case Study #2 - Pizza Runner](https://8weeksqlchallenge.com/case-study-2/)
 
+Database Environment: PostgreSQL v13 on [DB Fiddle](https://www.db-fiddle.com/f/7VcQKQwsS3CTkGRFG7vu98/65)
+
 ## Dataset
 
 Danny has prepared an [entity relationship diagram](https://dbdiagram.io/d/5f3e085ccf48a141ff558487/?utm_source=dbdiagram_embed&utm_medium=bottom_open) of his database design but requires further assistance to clean his data and apply some basic calculations so he can better direct his runners and optimise Pizza Runner’s operations.
@@ -21,7 +23,7 @@ Danny has prepared an [entity relationship diagram](https://dbdiagram.io/d/5f3e0
 - The `pizza_toppings` table: Contains all of the `topping_name` values with their corresponding `topping_id` value.
 
 ## Data Cleaning
-**Database Environment**: PostgreSQL v13 on [DB Fiddle](https://www.db-fiddle.com/f/7VcQKQwsS3CTkGRFG7vu98/65)
+
 ### Table: `customer_orders`
 Replace all 'null' or blank values with `NULL`.
 
@@ -39,7 +41,7 @@ SELECT
 	  WHEN extras = '' OR extras = 'null' THEN NULL
 	  ELSE extras
   END AS extras,
-	order_time
+  order_time
 FROM pizza_runner.customer_orders;
 
 SELECT * FROM customer_orders_temp
@@ -432,7 +434,7 @@ ORDER BY 2;
 
 #### Question 1: How many runners signed up for each 1 week period? (i.e. week starts `2021-01-01`)
 
-`EXTRACT(WEEK FROM ...` calculates weeks based on ISO 8601, which may not align with the requirement *(week starts 2021-01-01)* &rarr; Customize approach to calculate week number:
+`EXTRACT(WEEK FROM ...)` calculates weeks based on ISO 8601, which may not align with the requirement *(week starts 2021-01-01)* &rarr; Customize approach to calculate week number:
 
 - Calculate difference in days between the `registratrion_date` and 2021-01-01.
 - Convert different days to weeks by dividing it by 7.
@@ -1074,3 +1076,183 @@ The total revenue with extras is $142.
 ---
 
 #### Question 3: The Pizza Runner team now wants to add an additional ratings system that allows customers to rate their runner, how would you design an additional table for this new dataset - generate a schema for this new table and insert your own data for ratings for each successful customer order between 1 to 5.
+
+- `rating_id` (SERIAL): A unique identifier for each rating entry. This column is an auto-incrementing integer, serving as the primary key of the table.
+- `order_id` (INTEGER): A reference to the order for which the rating and review were provided. It is linked to the `order_id` in the `runner_orders` table.
+- `rating` (INTEGER): The numerical rating provided by the customer for the order's delivery service. Ratings typically range from 1 (lowest) to 5 (highest), representing the customer's satisfaction with the delivery service.
+- `review` (VARCHAR(100)): An optional text field where customers can provide a brief written review or feedback about the delivery service. This column can contain up to 100 characters.
+- `rating_time` (TIMESTAMP): The timestamp indicating when the feedback was submitted by customer.
+
+```sql
+DROP TABLE IF EXISTS runner_rating;
+CREATE TABLE runner_rating (
+  "rating_id" SERIAL PRIMARY KEY,
+  "order_id" INTEGER,
+  "rating" INTEGER,
+  "review" VARCHAR(100),
+  "rating_time" TIMESTAMP
+);
+INSERT INTO runner_rating
+	("order_id", "rating", "review", "rating_time")
+VALUES
+  ('1', '4', null, '2020-01-01 21:30:15'),
+  ('2', '5', 'Good experience', '2020-01-02 10:15:42'),
+  ('4', '2', 'Could be better', '2020-01-04 14:30:10'),
+  ('5', '5', 'Fantastic!', '2020-01-08 21:45:33'),
+  ('3', '3', 'Decent service', '2020-01-03 01:20:18'),
+  ('7', '4', null, '2020-01-08 22:10:15'),
+  ('8', '3', 'Not bad', '2020-01-10 00:45:27'),
+  ('10', '5', null, '2020-01-11 19:30:05');
+
+SELECT * FROM pizza_runner.runner_rating;
+```
+
+**Output:**
+
+| rating_id | order_id | rating | review          | rating_time              |
+| --------- | -------- | ------ | --------------- | ------------------------ |
+| 1         | 1        | 4      |                 | 2020-01-01T21:30:15.000Z |
+| 2         | 2        | 5      | Good experience | 2020-01-02T10:15:42.000Z |
+| 3         | 4        | 2      | Could be better | 2020-01-04T14:30:10.000Z |
+| 4         | 5        | 5      | Fantastic!      | 2020-01-08T21:45:33.000Z |
+| 5         | 3        | 3      | Decent service  | 2020-01-03T01:20:18.000Z |
+| 6         | 7        | 4      |                 | 2020-01-08T22:10:15.000Z |
+| 7         | 8        | 3      | Not bad         | 2020-01-10T00:45:27.000Z |
+| 8         | 10       | 5      |                 | 2020-01-11T19:30:05.000Z |
+
+---
+
+#### Question 4: Using your newly generated table - can you join all of the information together to form a table which has the following information for successful deliveries?
+
+**Expected output:**
+- `customer_id`
+- `order_id`
+- `runner_id`
+- `rating`
+- `order_time`
+- `pickup_time`
+- Time between order and pickup *(in minute)*
+- Delivery duration
+- Average speed *(km/h)*
+- Total number of pizzas
+
+```sql
+WITH order_rating AS (
+  SELECT 
+      order_id,
+      customer_id,
+      order_time,
+      rating,
+      COUNT(pizza_id) AS pizza_cnt
+  FROM customer_orders_temp
+  INNER JOIN pizza_runner.runner_rating USING(order_id)
+  GROUP BY 1, 2, 3, 4
+)
+
+SELECT 
+	customer_id,
+	order_id,
+	runner_id,
+	rating,
+	order_time,
+	pickup_time,
+	EXTRACT(MINUTE FROM pickup_time - order_time) AS prepare_time,
+	duration,
+	distance / duration * 60 avg_speed,
+	pizza_cnt
+FROM order_rating
+INNER JOIN runner_orders_temp USING(order_id)
+ORDER BY order_time;
+```
+
+**Output:**
+
+| customer_id | order_id | runner_id | rating | order_time               | pickup_time              | prepare_time | duration | avg_speed          | pizza_cnt |
+| ----------- | -------- | --------- | ------ | ------------------------ | ------------------------ | ------------ | -------- | ------------------ | --------- |
+| 101         | 1        | 1         | 4      | 2020-01-01T18:05:02.000Z | 2020-01-01T18:15:34.000Z | 10           | 32       | 37.5               | 1         |
+| 101         | 2        | 1         | 5      | 2020-01-01T19:00:52.000Z | 2020-01-01T19:10:54.000Z | 10           | 27       | 44.44444444444444  | 1         |
+| 102         | 3        | 1         | 3      | 2020-01-02T23:51:23.000Z | 2020-01-03T00:12:37.000Z | 21           | 20       | 40.2               | 2         |
+| 103         | 4        | 2         | 2      | 2020-01-04T13:23:46.000Z | 2020-01-04T13:53:03.000Z | 29           | 40       | 35.099999999999994 | 3         |
+| 104         | 5        | 3         | 5      | 2020-01-08T21:00:29.000Z | 2020-01-08T21:10:57.000Z | 10           | 15       | 40                 | 1         |
+| 105         | 7        | 2         | 4      | 2020-01-08T21:20:29.000Z | 2020-01-08T21:30:45.000Z | 10           | 25       | 60                 | 1         |
+| 102         | 8        | 2         | 3      | 2020-01-09T23:54:33.000Z | 2020-01-10T00:15:02.000Z | 20           | 15       | 93.6               | 1         |
+| 104         | 10       | 1         | 5      | 2020-01-11T18:34:49.000Z | 2020-01-11T18:50:20.000Z | 15    	   | 10       | 60                 | 2         |
+
+---
+
+#### Question 5: If a Meat Lovers pizza was $12 and Vegetarian $10 fixed prices with no cost for extras and each runner is paid $0.30 per kilometre traveled - how much money does Pizza Runner have left over after these deliveries?
+
+```sql
+WITH pizza_sales AS (
+  SELECT 
+      order_id,
+      SUM(
+      CASE
+          WHEN pizza_name = 'Meatlovers' THEN 12
+          WHEN pizza_name = 'Vegetarian' THEN 10
+      END) AS total_sales
+  FROM customer_orders_temp
+  INNER JOIN pizza_runner.pizza_names USING(pizza_id)
+  GROUP BY 1
+)
+
+SELECT SUM(total_sales - distance * 0.3) total_revenue
+FROM pizza_sales
+INNER JOIN runner_orders_temp USING(order_id)
+WHERE cancellation IS NULL;
+```
+
+**Output:**
+
+| total_revenue     |
+| ----------------- |
+| 94.44000000000001 |
+
+Pizza Runner has left over $94.44
+
+
+### E. Bonus Questions
+
+If Danny wants to expand his range of pizzas - how would this impact the existing data design? Write an INSERT statement to demonstrate what would happen if a new Supreme pizza with all the toppings was added to the Pizza Runner menu?
+
+**Insert a new pizza:**
+
+```sql
+INSERT INTO
+  pizza_names ("pizza_id", "pizza_name")
+VALUES
+  (3, 'Supreme');
+  
+INSERT INTO
+  pizza_recipes ("pizza_id", "toppings")
+VALUES
+  (3, '1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12');
+```
+
+**Check how our tables look like:**
+
+```sql
+SELECT * 
+FROM pizza_runner.pizza_names;
+
+SELECT *
+FROM pizza_runner.pizza_recipes;
+```
+
+**Output 1:**
+
+| pizza_id | pizza_name |
+| -------- | ---------- |
+| 1        | Meatlovers |
+| 2        | Vegetarian |
+| 3        | Supreme    |
+
+**Output 2:**
+
+| pizza_id | toppings                              |
+| -------- | ------------------------------------- |
+| 1        | 1, 2, 3, 4, 5, 6, 8, 10               |
+| 2        | 4, 6, 7, 9, 11, 12                    |
+| 3        | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 |
+
+---
