@@ -1,3 +1,10 @@
+-- Solved on PostgreSQL v13 by Duong Le Thanh Truc
+-- Date: 2023/10/19
+
+/* --------------------
+   B. Data Analysis Questions
+   --------------------*/
+
 SET search_path = foodie_fi;
 
 -- 1. How many customers has Foodie-Fi ever had?
@@ -83,4 +90,63 @@ WHERE plan_name = 'churn'
       AND date_diff = 7;
 
 
+-- 6. What is the number and percentage of customer plans after their initial free trial?
 
+-- Find the pre plan of each sub
+
+WITH prev_sub AS (
+  SELECT 
+      *,
+      LAG(plan_name) OVER(
+          PARTITION BY customer_id
+          ORDER BY start_date
+      ) AS prev_plan
+  FROM subscriptions
+  INNER JOIN plans USING(plan_id)
+)
+
+SELECT 
+	plan_id,
+	plan_name,
+	COUNT(1) AS cus_plan_cnt,
+	ROUND(
+      COUNT(1) * 100.0 / (
+          SELECT COUNT(1)
+          FROM prev_sub
+          WHERE prev_plan = 'trial'
+     ), 1) AS cus_plan_pct
+FROM prev_sub
+WHERE prev_plan = 'trial'
+GROUP BY 1, 2
+ORDER BY 1;
+
+
+-- 7. What is the customer count and percentage breakdown of all 5 plan_name values at 2020-12-31?
+
+-- Create a ranked list of subscription plans for each customer based on the latest start_date
+WITH cur_plan AS (
+  SELECT 
+      plan_id,
+      ROW_NUMBER() OVER(
+          PARTITION BY customer_id
+          ORDER BY start_date DESC
+      ) rn
+  FROM subscriptions
+  WHERE start_date <= MAKE_DATE(2020, 12, 31)
+)
+
+SELECT 
+	plan_id,
+	plan_name,
+	COUNT(1) AS cus_cnt,
+	ROUND(
+		COUNT(1) * 100.0 / (
+			SELECT COUNT(1)
+			FROM cur_plan
+			WHERE rn = 1
+		), 1) AS cus_pct
+FROM cur_plan
+INNER JOIN plans USING(plan_id)
+WHERE  rn = 1
+GROUP BY 1, 2
+ORDER BY 1;
