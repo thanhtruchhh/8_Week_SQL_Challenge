@@ -1,5 +1,5 @@
 -- Solved on PostgreSQL v13 by Duong Le Thanh Truc
--- Date: 2023/10/19
+-- Date: 2023/11/01
 
 /* --------------------
    B. Data Analysis Questions
@@ -150,3 +150,99 @@ INNER JOIN plans USING(plan_id)
 WHERE  rn = 1
 GROUP BY 1, 2
 ORDER BY 1;
+
+
+-- 8. How many customers have upgraded to an annual plan in 2020?
+
+SELECT 
+	plan_id,
+	plan_name,
+	COUNT(DISTINCT customer_id) AS cus_cnt
+FROM subscriptions
+INNER JOIN plans USING(plan_id)
+WHERE EXTRACT(YEAR FROM start_date) = 2020
+	AND plan_name LIKE '%annual%'
+GROUP BY 1, 2
+ORDER BY 1;
+
+
+-- 9. How many days on average does it take for a customer to an annual plan from the day they join Foodie-Fi?
+
+-- Get customers who have chosen an annual plan.
+WITH annual_cus AS (
+  SELECT 
+      customer_id,
+      start_date AS start_annual,
+      ROW_NUMBER() OVER(
+      	PARTITION BY customer_id
+      	ORDER BY start_date
+      ) AS rn
+  FROM subscriptions
+  INNER JOIN plans USING(plan_id)
+  WHERE plan_name LIKE '%annual%'
+)
+
+SELECT ROUND(AVG(start_annual - start_date)) day_avg
+FROM subscriptions s
+INNER JOIN annual_cus a USING(customer_id)
+INNER JOIN plans USING(plan_id)
+WHERE rn = 1 --  Ensure only considering the 1st annual subscription for each customer
+	AND s.start_date <= a.start_annual
+	AND plan_name = 'trial';
+
+
+-- 10. Can you further breakdown this average value into 30 day periods (i.e. 0-30 days, 31-60 days etc)
+
+-- Get customers who have chosen an annual plan.
+WITH annual_cus AS (
+  SELECT 
+      customer_id,
+      start_date AS start_annual,
+      ROW_NUMBER() OVER(
+      	PARTITION BY customer_id
+      	ORDER BY start_date
+      ) AS rn
+  FROM subscriptions
+  INNER JOIN plans USING(plan_id)
+  WHERE plan_name LIKE '%annual%'
+)
+
+SELECT *
+FROM (
+  SELECT 
+      CASE
+          WHEN (start_annual - start_date)  <= 30 THEN '0-30 days'
+          ELSE (((start_annual - start_date - 31) / 30 + 1)  * 30 + 1)::TEXT || '-' || (((start_annual - start_date - 31) / 30 + 1) * 30 + 30)::TEXT || ' days'
+      END AS day_period,
+      COUNT(1) AS cus_cnt,
+      ROUND(AVG(start_annual - start_date)) AS day_avg
+  FROM subscriptions s
+  INNER JOIN annual_cus a USING(customer_id)
+  INNER JOIN plans USING(plan_id)
+  WHERE rn = 1 --  Ensure only considering the 1st annual subscription for each customer
+      AND s.start_date <= a.start_annual
+      AND plan_name = 'trial'
+  GROUP BY 1
+) AS a
+ORDER BY SPLIT_PART(day_period, '-', 1)::INT;
+
+
+-- 11. How many customers downgraded from a pro monthly to a basic monthly plan in 2020?
+
+-- Get customers who subscribed to the basic monthly plan in 2020
+WITH cus_basic AS (
+  SELECT 
+      customer_id,
+      start_date AS basic_date
+  FROM subscriptions
+  INNER JOIN plans USING(plan_id)
+  WHERE EXTRACT(YEAR FROM start_date) = 2020
+      AND plan_name = 'basic monthly'
+)
+
+SELECT COUNT(1) AS cus_cnt
+FROM subscriptions s
+INNER JOIN cus_basic c ON s.customer_id = c.customer_id AND s.start_date < c.basic_date
+INNER JOIN plans USING(plan_id)
+WHERE plan_name = 'pro monthly';
+
