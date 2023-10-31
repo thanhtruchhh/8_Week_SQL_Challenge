@@ -282,30 +282,103 @@ Over 90% of customers chose paid plan with a majority opting for the basic month
 #### 7. What is the customer count and percentage breakdown of all 5 `plan_name` values at `2020-12-31`?
 
 ```sql
+WITH cur_plan AS (
+  SELECT 
+      plan_id,
+      ROW_NUMBER() OVER(
+          PARTITION BY customer_id
+          ORDER BY start_date DESC
+      ) rn
+  FROM subscriptions
+  WHERE start_date <= MAKE_DATE(2020, 12, 31)
+)
 
+SELECT 
+	plan_id,
+	plan_name,
+	COUNT(1) AS cus_cnt,
+	ROUND(
+		COUNT(1) * 100.0 / (
+			SELECT COUNT(1)
+			FROM cur_plan
+			WHERE rn = 1
+		), 1) AS cus_pct
+FROM cur_plan
+INNER JOIN plans USING(plan_id)
+WHERE  rn = 1
+GROUP BY 1, 2
+ORDER BY 1;
 ```
 
 **Output:**
+
+| plan_id | plan_name     | cus_cnt | cus_pct |
+| ------- | ------------- | ------- | ------- |
+| 0       | trial         | 19      | 1.9     |
+| 1       | basic monthly | 224     | 22.4    |
+| 2       | pro monthly   | 326     | 32.6    |
+| 3       | pro annual    | 195     | 19.5    |
+| 4       | churn         | 236     | 23.6    |
+
 
 ---
 
 #### 8. How many customers have upgraded to an annual plan in 2020?
 
 ```sql
-
+SELECT 
+	plan_id,
+	plan_name,
+	COUNT(DISTINCT customer_id) AS cus_cnt
+FROM subscriptions
+INNER JOIN plans USING(plan_id)
+WHERE EXTRACT(YEAR FROM start_date) = 2020
+	AND plan_name LIKE '%annual%'
+GROUP BY 1, 2
+ORDER BY 1;
 ```
 
 **Output:**
+| plan_id | plan_name  | cus_cnt |
+| ------- | ---------- | ------- |
+| 3       | pro annual | 195     |
+
+195 customers have upgraded to an annual plan in 2020.
 
 ---
 
 #### 9. How many days on average does it take for a customer to an annual plan from the day they join Foodie-Fi?
 
 ```sql
+WITH annual_cus AS (
+  SELECT 
+      customer_id,
+      start_date AS start_annual,
+      ROW_NUMBER() OVER(
+      	PARTITION BY customer_id
+      	ORDER BY start_date
+      ) AS rn
+  FROM subscriptions
+  INNER JOIN plans USING(plan_id)
+  WHERE plan_name LIKE '%annual%'
+)
 
+SELECT ROUND(AVG(start_annual - start_date)) day_avg
+FROM subscriptions s
+INNER JOIN annual_cus a USING(customer_id)
+INNER JOIN plans USING(plan_id)
+WHERE rn = 1
+	AND s.start_date <= a.start_annual
+	AND plan_name = 'trial';
 ```
 
 **Output:**
+
+| day_avg |
+| ------- |
+| 105     |
+
+It takes 105 days on average for a customer upgrade to an annual plan.
 
 ---
 
@@ -313,20 +386,93 @@ Over 90% of customers chose paid plan with a majority opting for the basic month
 
 *(i.e. 0-30 days, 31-60 days etc)*
 
-```sql
+**Steps:**
+1. Identify customers who have been on an annual plan by the `annual_cus` CTE.
+2. Join the subscriptions table with the CTE annual_cus and the plans table.
+3. Keep only the first annual subscription record for each customer *(`rn = 1`)* and customers on the `trial` plan and where the trial subscription `start_date` is before or equal to the annual subscription start date.
+4. Group the result by 30-day period and apply aggregate function.
+5. Order the result based on the start of the 30-day period.
 
+```sql
+WITH annual_cus AS (
+  SELECT 
+      customer_id,
+      start_date AS start_annual,
+      ROW_NUMBER() OVER(
+      	PARTITION BY customer_id
+      	ORDER BY start_date
+      ) AS rn
+  FROM subscriptions
+  INNER JOIN plans USING(plan_id)
+  WHERE plan_name LIKE '%annual%'
+)
+
+SELECT *
+FROM (
+  SELECT 
+      CASE
+          WHEN (start_annual - start_date)  <= 30 THEN '0-30 days'
+          ELSE (((start_annual - start_date - 31) / 30 + 1)  * 30 + 1)::TEXT || '-' || (((start_annual - start_date - 31) / 30 + 1) * 30 + 30)::TEXT || ' days'
+      END AS day_period,
+      COUNT(1) AS cus_cnt,
+      ROUND(AVG(start_annual - start_date)) AS day_avg
+  FROM subscriptions s
+  INNER JOIN annual_cus a USING(customer_id)
+  INNER JOIN plans USING(plan_id)
+  WHERE rn = 1
+      AND s.start_date <= a.start_annual
+      AND plan_name = 'trial'
+  GROUP BY 1
+) AS a
+ORDER BY SPLIT_PART(day_period, '-', 1)::INT;
 ```
 
 **Output:**
+
+| day_period   | cus_cnt | day_avg |
+| ------------ | ------- | ------- |
+| 0-30 days    | 49      | 10      |
+| 31-60 days   | 24      | 42      |
+| 61-90 days   | 34      | 71      |
+| 91-120 days  | 35      | 101     |
+| 121-150 days | 42      | 133     |
+| 151-180 days | 36      | 162     |
+| 181-210 days | 26      | 191     |
+| 211-240 days | 4       | 224     |
+| 241-270 days | 5       | 257     |
+| 271-300 days | 1       | 285     |
+| 301-330 days | 1       | 327     |
+| 331-360 days | 1       | 346     |
 
 ---
 
 #### 11. How many customers downgraded from a pro monthly to a basic monthly plan in 2020?
 
 ```sql
+-- Get customers who subscribed to the basic monthly plan in 2020
+WITH cus_basic AS (
+  SELECT 
+      customer_id,
+      start_date AS basic_date
+  FROM subscriptions
+  INNER JOIN plans USING(plan_id)
+  WHERE EXTRACT(YEAR FROM start_date) = 2020
+      AND plan_name = 'basic monthly'
+)
 
+SELECT COUNT(1) AS cus_cnt
+FROM subscriptions s
+INNER JOIN cus_basic c ON s.customer_id = c.customer_id AND s.start_date < c.basic_date
+INNER JOIN plans USING(plan_id)
+WHERE plan_name = 'pro monthly';
 ```
 
 **Output:**
 
+| cus_cnt |
+| ------- |
+| 0       |
+
+ There is no customer downgraded their plans from a pro monthly to a basic monthly plan in 2020.
+ 
 ---
