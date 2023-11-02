@@ -476,3 +476,135 @@ WHERE plan_name = 'pro monthly';
  There is no customer downgraded their plans from a pro monthly to a basic monthly plan in 2020.
  
 ---
+
+### C. Challenge Payment Question
+
+The Foodie-Fi team wants you to create a new `payments` table for the year 2020 that includes amounts paid by each customer in the `subscriptions` table with the following requirements:
+- Monthly payments always occur on the same day of month as the original `start_date` of any monthly paid plan
+- Upgrades from basic to monthly or pro plans are reduced by the current paid amount in that month and start immediately
+- Upgrades from pro monthly to pro annual are paid at the end of the current billing period and also starts at the end of the month period
+- Once a customer churns they will no longer make payments
+
+**Steps:**
+1. Use `LEAD` to find the next subscription of each customer in 2020.
+2. Use `GENERATE_SERIES` to calculate the `payment_date` based on specific conditions:
+   - If the plan is pro annual, the `payment_date` is set to the `start_date`.
+   - If a customer churns, the record is excluded.
+   - If the plan is monthly and there is no activity for a customer until the end of 2020, payments are processed monthly from the `start_date` to the end of the year.
+   - Otherwise, payments are processed monthly from the `start_date` to the day before the next new subscription starts.
+3. Use `LAG` to find the previous payment information for each customer in 2020.
+4. Calculate payment amount:
+   - If the plan is pro annual and the previous plan is basic monthly with `payment_date` less than `prev_date` - 1 month, set the amount is current price - the previous price.
+   - Otherwise, set the is the price.
+   
+```sql
+WITH next_sub AS (
+  SELECT 
+      customer_id,
+      plan_id,
+      plan_name,
+      start_date,
+      price,
+      LEAD(plan_name) OVER(
+      	PARTITION BY customer_id
+      	ORDER BY start_date
+      ) AS next_plan,
+      LEAD(start_date) OVER(
+      	PARTITION BY customer_id
+      	ORDER BY start_date
+      ) AS next_start_date
+  FROM subscriptions
+  INNER JOIN plans USING(plan_id)
+  WHERE plan_name != 'trial'
+      AND EXTRACT(YEAR FROM start_date) = 2020
+),
+
+payments AS (
+  SELECT
+      customer_id,
+      plan_id,
+      plan_name,
+      GENERATE_SERIES(
+          start_date,
+          CASE
+              WHEN plan_name = 'pro annual' THEN start_date
+              WHEN plan_name = 'churn' THEN NULL
+              WHEN next_plan IS NULL THEN MAKE_DATE(2020, 12, 31)
+              ELSE next_start_date - INTERVAL '1 day'
+          END, 
+      '1 month') AS payment_date,
+      price
+  FROM next_sub
+),
+
+prev_payments AS (
+  SELECT
+      *,
+      LAG(plan_name) OVER(
+          PARTITION BY customer_id
+          ORDER BY payment_date
+      ) AS prev_plan,
+      LAG(payment_date) OVER(
+          PARTITION BY customer_id
+          ORDER BY payment_date
+      ) AS prev_date,
+      LAG(price) OVER(
+          PARTITION BY customer_id
+          ORDER BY payment_date
+      ) AS prev_price
+  FROM payments
+)
+
+SELECT
+	customer_id,
+	plan_id,
+	plan_name,
+	payment_date,
+	CASE
+		WHEN plan_name = 'pro annual' AND prev_plan = 'basic monthly' AND payment_date < prev_date + INTERVAL '1 month' THEN price - prev_price
+ 		ELSE price
+	END AS amount,
+	ROW_NUMBER() OVER(
+		PARTITION BY customer_id
+		ORDER BY payment_date
+    )
+FROM prev_payments
+ORDER BY 1, 4;
+```
+**Output:**
+
+| customer_id | plan_id | plan_name     | payment_date             | amount | row_number |
+| ----------- | ------- | ------------- | ------------------------ | ------ | ---------- |
+| 1           | 1       | basic monthly | 2020-08-08T00:00:00.000Z | 9.90   | 1          |
+| 1           | 1       | basic monthly | 2020-09-08T00:00:00.000Z | 9.90   | 2          |
+| 1           | 1       | basic monthly | 2020-10-08T00:00:00.000Z | 9.90   | 3          |
+| 1           | 1       | basic monthly | 2020-11-08T00:00:00.000Z | 9.90   | 4          |
+| 1           | 1       | basic monthly | 2020-12-08T00:00:00.000Z | 9.90   | 5          |
+| 2           | 3       | pro annual    | 2020-09-27T00:00:00.000Z | 199.00 | 1          |
+...
+| 13          | 1       | basic monthly | 2020-12-22T00:00:00.000Z | 9.90   | 1          |
+| 14          | 1       | basic monthly | 2020-09-29T00:00:00.000Z | 9.90   | 1          |
+| 14          | 1       | basic monthly | 2020-10-29T00:00:00.000Z | 9.90   | 2          |
+| 14          | 1       | basic monthly | 2020-11-29T00:00:00.000Z | 9.90   | 3          |
+| 14          | 1       | basic monthly | 2020-12-29T00:00:00.000Z | 9.90   | 4          |
+| 15          | 2       | pro monthly   | 2020-03-24T00:00:00.000Z | 19.90  | 1          |
+| 15          | 2       | pro monthly   | 2020-04-24T00:00:00.000Z | 19.90  | 2          |
+| 16          | 1       | basic monthly | 2020-06-07T00:00:00.000Z | 9.90   | 1          |
+| 16          | 1       | basic monthly | 2020-07-07T00:00:00.000Z | 9.90   | 2          |
+| 16          | 1       | basic monthly | 2020-08-07T00:00:00.000Z | 9.90   | 3          |
+| 16          | 1       | basic monthly | 2020-09-07T00:00:00.000Z | 9.90   | 4          |
+| 16          | 1       | basic monthly | 2020-10-07T00:00:00.000Z | 9.90   | 5          |
+| 16          | 3       | pro annual    | 2020-10-21T00:00:00.000Z | 189.10 | 6          |
+...
+| 18          | 2       | pro monthly   | 2020-07-13T00:00:00.000Z | 19.90  | 1          |
+| 18          | 2       | pro monthly   | 2020-08-13T00:00:00.000Z | 19.90  | 2          |
+| 18          | 2       | pro monthly   | 2020-09-13T00:00:00.000Z | 19.90  | 3          |
+| 18          | 2       | pro monthly   | 2020-10-13T00:00:00.000Z | 19.90  | 4          |
+| 18          | 2       | pro monthly   | 2020-11-13T00:00:00.000Z | 19.90  | 5          |
+| 18          | 2       | pro monthly   | 2020-12-13T00:00:00.000Z | 19.90  | 6          |
+| 19          | 2       | pro monthly   | 2020-06-29T00:00:00.000Z | 19.90  | 1          |
+| 19          | 2       | pro monthly   | 2020-07-29T00:00:00.000Z | 19.90  | 2          |
+| 19          | 3       | pro annual    | 2020-08-29T00:00:00.000Z | 199.00 | 3          |
+
+---
+
