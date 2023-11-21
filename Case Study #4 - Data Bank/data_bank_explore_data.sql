@@ -46,7 +46,6 @@ WITH next_allocation AS (
           ORDER BY start_date
       ) - end_date AS date_diff
   FROM customer_nodes
-  WHERE end_date != '9999-12-31' 
 )
 
 SELECT COUNT(1)
