@@ -38,6 +38,21 @@ SELECT
 FROM customer_nodes;
 -- The maximum end date is set to 9999-12-31. This may indicate that these records represent the latest allocation.
 
+-- Check if the random distribution changes for each customer are occurring continuously
+WITH next_allocation AS (
+  SELECT *,
+      LEAD(start_date) OVER(
+          PARTITION BY customer_id, region_id
+          ORDER BY start_date
+      ) - end_date AS date_diff
+  FROM customer_nodes
+  WHERE end_date != '9999-12-31' 
+)
+
+SELECT COUNT(1)
+FROM next_allocation
+WHERE date_diff != 1;
+-- Node allocations for each customer occur continuously, with the start day of the current allocation being the next day after the end day of the previous allocation.
 
 -- CUSTOMER TRANSACTIONS TABLE
 
