@@ -261,47 +261,56 @@ ORDER BY 1;
 
 #### 4. What is the closing balance for each customer at the end of the month?
 
+Firstly, I create a temp table to calculate the closing balance for each customer at the end of the month. Then, it'll be used in query 4 and 5.
 ```sql
-WITH txn_balances AS (
-  SELECT
-      customer_id,
-      DATE_TRUNC('month', txn_date) + INTERVAL '1 month - 1 day' AS end_of_mth,
-      CASE
-          WHEN txn_type = 'deposit' THEN txn_amount
-          ELSE -txn_amount
-      END AS txn_balance
-  FROM customer_transactions
-),
+CREATE TEMP TABLE customer_monthly_balance AS (
+  WITH txn_balances AS (
+    SELECT
+        customer_id,
+        DATE_TRUNC('month', txn_date) + INTERVAL '1 month - 1 day' AS end_of_mth,
+        CASE
+            WHEN txn_type = 'deposit' THEN txn_amount
+            ELSE -txn_amount
+        END AS txn_balance
+    FROM customer_transactions
+  ),
 
--- Calc transaction balance changes in seperate months
-monthly_changes AS (
-  SELECT
+  monthly_changes AS (
+    SELECT
+        customer_id,
+        end_of_mth,
+        SUM(txn_balance) AS monthly_change
+    FROM txn_balances
+    GROUP BY 1, 2
+  ),
+
+  month_end_series AS (
+  SELECT 
+      customer_id,
+      DATE_TRUNC('month', GENERATE_SERIES(MIN(txn_date), MAX(txn_date), INTERVAL '1 month')) + INTERVAL '1 month - 1 day' AS end_of_mth
+  FROM customer_transactions
+  GROUP BY 1
+  )
+
+  SELECT 
       customer_id,
       end_of_mth,
-      SUM(txn_balance) AS monthly_change
-  FROM txn_balances
-  GROUP BY 1, 2
-),
+      SUM(monthly_change) OVER(
+          PARTITION BY customer_id
+          ORDER BY end_of_mth
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) AS closing_balance
+  FROM monthly_changes
+  FULL JOIN month_end_series USING (customer_id, end_of_mth)
+);
+```
 
--- Create a table with customer_id and the ending date of each month from the minimum txn_date to the maximum txn_date
-month_end_series AS (
-SELECT 
-	customer_id,
-	DATE_TRUNC('month', GENERATE_SERIES(MIN(txn_date), MAX(txn_date), INTERVAL '1 month')) + INTERVAL '1 month - 1 day' AS end_of_mth
-FROM customer_transactions
-GROUP BY 1
-)
+I show the result for customer 1, 2, 3 only.
 
-SELECT 
-	customer_id,
-	end_of_mth,
-    	SUM(monthly_change) OVER(
-		PARTITION BY customer_id
-		ORDER BY end_of_mth
-		ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-	) AS monthly_balance
-FROM monthly_changes
-FULL JOIN month_end_series USING (customer_id, end_of_mth)
+```sql
+SELECT *
+FROM customer_monthly_balance
+WHERE customer_id IN ('1', '2', '3')
 ORDER BY 1, 2;
 ```
 
@@ -319,3 +328,45 @@ ORDER BY 1, 2;
 | 3           | 2020-03-31T00:00:00.000Z | -1222           |
 | 3           | 2020-04-30T00:00:00.000Z | -729            |
 ---
+
+#### 5. What is the percentage of customers who increase their closing balance by more than 5%?
+- The % change should be calculated based on the assumption of either growth or decline, irrespective of the direction of the increase/decrease in the variable. Therefore, I use the absolute value to ensure that the sign of closing balance does not affect the result of the % change.
+- To avoid division by 0 and to ensure that the % change is well-defined, I add a very small number but non-zero number *(like 0.0000000000000001)* to both the balance of the current month and the balance of the previous month.
+
+`% change = (Balance of Current Month - Balance of Previous Month) / ABS(Balance of Previous Month + 0.0000000000000001) * 100`
+
+```sql
+WITH prev_month_balance AS (
+  SELECT 
+      *,
+      LAG(closing_balance) OVER(
+          PARTITION BY customer_id
+          ORDER BY end_of_mth
+      ) AS prev_closing_balance
+  FROM customer_monthly_balance
+),
+
+monthly_change AS (
+  SELECT 
+      customer_id,
+      end_of_mth,
+      (closing_balance - prev_closing_balance) * 100.0 / ABS(prev_closing_balance + 0.0000000000000001) AS change_pct
+  FROM prev_month_balance
+)
+
+SELECT
+	ROUND(
+		100.0 * COUNT(DISTINCT customer_id) / (SELECT COUNT (DISTINCT customer_id) FROM customer_monthly_balance),
+	2) AS pct_more_than_5
+FROM monthly_change
+WHERE change_pct > 5;
+```
+
+**Output:**
+
+| pct_more_than_5 |
+| ----- |
+| 67.40 |
+
+---
+
